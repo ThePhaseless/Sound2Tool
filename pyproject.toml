@@ -12,6 +12,7 @@ dependencies = [
     "librosa>=0.10",
     "torch>=2.4",
     "ipywidgets>=8.0",
+    "tqdm>=4.68.2",
 ]
 
 [project.optional-dependencies]
@@ -27,3 +28,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "nbconvert>=7.17.1",
+]
