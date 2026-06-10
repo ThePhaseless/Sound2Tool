@@ -5,14 +5,14 @@ description = "NSynth instrument classification - identify instruments from audi
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
-    "numpy>=2.0",
-    "pandas>=3.0",
-    "scikit-learn>=1.5",
-    "matplotlib>=3.9",
-    "librosa>=0.10",
-    "torch>=2.4",
-    "torchaudio>=2.4",
-    "ipywidgets>=8.0",
+    "numpy>=2.4.6",
+    "pandas>=3.0.3",
+    "scikit-learn>=1.9.0",
+    "matplotlib>=3.10.9",
+    "librosa>=0.11.0",
+    "torch>=2.12.0",
+    "torchaudio>=2.11.0",
+    "ipywidgets>=8.1.8",
     "tqdm>=4.68.2",
     "pypdl>=1.5.7",
 ]
@@ -23,14 +23,6 @@ dev = ["ruff>=0.5", "pytest>=8.0", "ipykernel>=6.29"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-
-[[tool.uv.index]]
-name = "pytorch-cu132"
-url = "https://download.pytorch.org/whl/cu132"
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch-cu132" }
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
