@@ -1,0 +1,11 @@
+[tools]
+uv = "latest"
+python = "3.12"
+ruff = "latest"
+
+[tasks]
+sync = "uv sync"
+sync-dev = "uv sync --extra dev"
+lint = "uv run ruff check ."
+fmt = "uv run ruff format ."
+notebook = "uv run jupyter notebook"
