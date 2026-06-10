@@ -6,6 +6,7 @@ ruff = "latest"
 [tasks]
 sync = "uv sync"
 sync-dev = "uv sync --extra dev"
+typecheck = "uv run pyright"
 lint = "uv run ruff check ."
 fmt = "uv run ruff format ."
 notebook = "uv run jupyter notebook"
