@@ -5,27 +5,42 @@ description = "NSynth instrument classification - identify instruments from audi
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
-    "numpy>=2.4.6",
-    "pandas>=3.0.3",
-    "scikit-learn>=1.9.0",
-    "matplotlib>=3.10.9",
-    "librosa>=0.11.0",
-    "torch>=2.12.0",
-    "torchaudio>=2.11.0",
-    "ipywidgets>=8.1.8",
-    "tqdm>=4.68.2",
-    "pypdl>=1.5.7",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "matplotlib",
+    "librosa",
+    "torch",
+    "torchaudio",
+    "ipywidgets",
+    "tqdm",
+    "pypdl",
+    "soundfile",
 ]
 
 [project.optional-dependencies]
-dev = ["ruff>=0.5", "pytest>=8.0", "ipykernel>=6.29"]
+dev = ["ruff", "pytest", "ipykernel"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
+[[tool.uv.index]]
+name = 'pytorch'
+url = "https://download.pytorch.org/whl/cu130"
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [dependency-groups]
-dev = ["ipykernel>=7.3.0", "nbconvert>=7.17.1", "pyright>=1.1.410"]
+dev = [
+    "ipykernel>=7.3.0",
+    "nbconvert>=7.17.1",
+    "pyright>=1.1.410",
+    "pytest>=9.0.3",
+    "ruff>=0.15.16",
+]
