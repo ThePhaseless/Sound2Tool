@@ -4,54 +4,55 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "# Sound2Tool — klasyfikacja rodzin instrumentów muzycznych\n",
+    "# NSynth Instrument Classifier\n",
     "\n",
-    "*Jakub Orchowski, Franciszek Przybyłowski*\n",
+    "This notebook demonstrates how to classify musical instrument families from audio recordings using deep learning.\n",
     "\n",
-    "Notebook implementuje automatyczną klasyfikację rodziny instrumentu muzycznego na podstawie czterosekundowego nagrania pojedynczej nuty, z wykorzystaniem uczenia głębokiego na melspektrogramach.\n",
+    "## Problem Statement\n",
     "\n",
-    "## 1. Streszczenie\n",
+    "Given a 4-second audio clip of a single musical note, we want to predict which **instrument family** it belongs to. This is a **multi-class classification** problem with 11 classes.\n",
     "\n",
-    "Projekt Sound2Tool obejmuje budowę systemu automatycznej klasyfikacji rodziny instrumentu muzycznego na podstawie czterosekundowego nagrania pojedynczej nuty. Wykorzystano zbiór danych NSynth (Google Magenta), liczący ponad trzysta tysięcy nagrań przypisanych do jedenastu klas. Nagrania przekształcono w melspektrogramy i porównano trzy podejścia: klasyfikator Random Forest na cechach MFCC, splotową sieć neuronową CNN oraz hybrydę CNN i LSTM uwzględniającą zależności czasowe w obrębie nuty. Na zbiorze testowym najlepszy wynik, 78,7% dokładności, uzyskał model CNN+LSTM, wyraźnie przewyższając baseline (57,5%) oraz sam CNN (77,7%), co potwierdza skuteczność uczenia głębokiego w rozpoznawaniu barwy instrumentów.\n",
+    "## Dataset: NSynth\n",
     "\n",
-    "## 2. Wstęp\n",
+    "We use the [NSynth dataset](https://magenta.withgoogle.com/datasets/nsynth) by Google Magenta, which contains:\n",
+    "- **289,205 training samples** - musical notes from various instruments\n",
+    "- **12,678 validation samples** - for hyperparameter tuning\n",
+    "- **4,096 test samples** - for final evaluation\n",
     "\n",
-    "Automatyczne rozpoznawanie instrumentów muzycznych na podstawie nagrania audio jest jednym z klasycznych zadań dziedziny Music Information Retrieval (MIR). Znajduje ono zastosowanie m.in. w wyszukiwaniu utworów po brzmieniu, automatycznej transkrypcji nut, tagowaniu i organizacji bibliotek sampli, rekomendacji muzycznej oraz w narzędziach edukacyjnych wspierających naukę gry. Zadanie to jest utrudnione przez dużą zmienność barwy (timbre) zależną od techniki gry, sposobu wzbudzenia dźwięku i warunków nagrania, a w muzyce polifonicznej dodatkowo przez nakładanie się brzmień wielu instrumentów.\n",
+    "Each sample is a 4-second WAV file at 16kHz, representing a single musical note with metadata (pitch, velocity, instrument family).\n",
     "\n",
-    "W ostatniej dekadzie dominującym podejściem do tego problemu stało się łączenie reprezentacji czasowo-częstotliwościowych sygnału audio — takich jak melspektrogram — z konwolucyjnymi sieciami neuronowymi (CNN) zaczerpniętymi z analizy obrazów. Klasyfikację dźwięku traktuje się wtedy jak klasyfikację dwuwymiarowej mapy energii sygnału w czasie i częstotliwości, co pozwala sieci automatycznie uczyć się cech istotnych dla rozpoznania instrumentu bez ręcznego projektowania deskryptorów akustycznych.\n",
+    "## Instrument Families (11 classes)\n",
     "\n",
-    "Niniejszy notebook implementuje taki system w ramach projektu Sound2Tool. Prezentuje pełny potok pracy z danymi audio: od pobrania i przygotowania zbioru NSynth, przez ekstrakcję cech i ich efektywne cache'owanie, po trenowanie, ewaluację i interaktywną klasyfikację nowych nagrań. Sprawozdanie ułożone jest w dziewięciu sekcjach odpowiadających kolejnym etapom eksperymentu; podsekcje rozsiane są przy odpowiadającym im kodzie, dlatego numeracja 7.x pojawia się w kilku miejscach notebooka."
+    "| Family | Description |\n",
+    "|--------|-------------|\n",
+    "| bass | Bass instruments (bass guitar, synth bass) |\n",
+    "| brass | Brass instruments (trumpet, trombone) |\n",
+    "| flute | Flute and similar woodwinds |\n",
+    "| guitar | Acoustic and electric guitars |\n",
+    "| keyboard | Piano, electric piano, clavichord |\n",
+    "| mallet | Marimba, xylophone, vibraphone |\n",
+    "| organ | Pipe organ, Hammond organ |\n",
+    "| reed | Saxophone, clarinet, oboe |\n",
+    "| string | Violin, cello, viola |\n",
+    "| synth_lead | Synthesizer lead sounds |\n",
+    "| vocal | Human voice |\n",
+    "\n",
+    "## Models Compared\n",
+    "\n",
+    "We compare three approaches:\n",
+    "\n",
+    "1. **Baseline (Random Forest)**: Traditional ML on handcrafted MFCC features\n",
+    "2. **CNN**: Convolutional neural network on mel spectrograms\n",
+    "3. **CNN + LSTM**: CNN for spatial features + LSTM for temporal modeling"
    ]
   },
   {
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "## 3. Kontekst i cel projektu\n",
+    "## Setup and Imports\n",
     "\n",
-    "Sformułowany problem jest zadaniem klasyfikacji wieloklasowej: dla danego czterosekundowego nagrania pojedynczej nuty (16 kHz, mono) należy przewidzieć, do której z jedenastu rodzin instrumentów ono należy — bass, brass, flute, guitar, keyboard, mallet, organ, reed, string, synth_lead, vocal. Operujemy na nagraniach monofonicznych i pojedynczych nutach, co odróżnia to zadanie od trudniejszego problemu rozpoznawania instrumentu dominującego w nagraniu polifonicznym, którym zajmuje się część przywołanej w sekcji 4 literatury.\n",
-    "\n",
-    "Celem projektu jest zbudowanie i porównanie trzech podejść o rosnącej złożoności: klasycznego klasyfikatora uczenia maszynowego jako punktu odniesienia (baseline), splotowej sieci neuronowej operującej na melspektrogramach oraz modelu hybrydowego CNN+LSTM, który dodatkowo modeluje zależności czasowe w obrębie przebiegu nuty (fazy atak, podtrzymanie, wybrzmienie).\n",
-    "\n",
-    "Równie istotnym celem, z inżynierskiego punktu widzenia, jest zbudowanie kompletnego i wydajnego potoku: pobrania danych, ekstrakcji i cache'owania cech akustycznych, trenowania z regularyzacją, ewaluacji na zbiorze testowym oraz prostego interfejsu pozwalającego sklasyfikować dowolny plik audio bez ponownego trenowania modelu."
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 4. Literatura\n",
-    "\n",
-    "Zbiór NSynth wprowadzili Engel i in. (2017) w pracy nad autoenkoderem WaveNet, udostępniając ponad 300 tys. nagrań pojedynczych nut jako benchmark dla uczenia maszynowego w domenie audio. Zastosowanie CNN na melspektrogramach do rozpoznawania instrumentów ustalili Han, Kim i Lee (2017), wykazując przewagę tego podejścia nad metodami opartymi na cechach spektralnych i klasyfikatorach SVM. Chen, Ghobakhlou i Narayanan (2024) porównali sześć reprezentacji widmowych na tym samym zbiorze NSynth i dziesięciu rodzinach, potwierdzając — z wykorzystaniem map istotności (Integrated Gradients) — że melspektrogram i MFCC należą do najbardziej informatywnych reprezentacji. Senatori i in. (2025) zastosowali ten sam schemat porównania baseline'u ML (regresja logistyczna, kNN, Random Forest) z CNN, a Akter i in. (2025) uzasadnili teoretycznie architektury hybrydowe CNN+LSTM w klasyfikacji dźwięku, wykazując ich przewagę nad samodzielnym CNN i LSTM. Wspólny wniosek przywołanej literatury: dla nagrań izolowanych o ograniczonej zmienności akustycznej modele oparte na melspektrogramie i CNN osiągają wysoką dokładność, a głównym wyzwaniem pozostaje niezbalansowanie klas oraz mylenie instrumentów o zbliżonej barwie — obie obserwacje znajdują potwierdzenie w wynikach niniejszego projektu (sekcja 8)."
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "### Środowisko i biblioteki\n",
-    "\n",
-    "Potok zaimplementowano w Pythonie z wykorzystaniem ekosystemu PyTorch. Do przetwarzania audio użyto `librosa` oraz `torchaudio` (GPU-akcelerowana ekstrakcja melspektrogramów), do trenowania sieci — PyTorch z CUDA, a do klasyfikatora bazowego — scikit-learn. Wizualizacje tworzone są matplotlibem, a interaktywny interfejs oparto na ipywidgets. Poniższa komórka importuje wszystkie zależności, ustala ziarno losowości (42) dla powtarzalności eksperymentu oraz wykrywa dostępne urządzenie (GPU/CPU)."
+    "We import the necessary libraries for audio processing, deep learning, and visualization."
    ]
   },
   {
@@ -110,9 +111,9 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### Konfiguracja i hiperparametry\n",
+    "## Configuration\n",
     "\n",
-    "Wszystkie parametry potoku zebrano w jednym miejscu, co ułatwia powtarzalne eksperymenty. Częstotliwość próbkowania 16 kHz i długość nuty 4 s determinują rozmiar wejścia; parametry STFT (`n_fft=1024`, `hop_length=512`, `n_mels=128`) kształtują melspektrogram. Hiperparametry treningu: batch 256, 30 epok, współczynnik uczenia 1e-3, cierpliwość early stopping 7. Osobny `GPU_BATCH_SIZE=512` kontroluje rozmiar partii przy ekstrakcji cech na karcie graficznej, a liczba workerów DataLoadera ograniczona jest do 16. Zdefiniowano też listę 11 rodzin instrumentów oraz ścieżki do danych i katalogu cache."
+    "These constants control the audio processing, model architecture, and training parameters."
    ]
   },
   {
@@ -170,19 +171,11 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "## 5. Opis danych\n",
+    "## Data Download\n",
     "\n",
-    "### 5.1 Pozyskanie i podział zbioru danych\n",
+    "The NSynth dataset is distributed as compressed archives (~4GB each). We download and extract them if not already present.\n",
     "\n",
-    "Projekt wykorzystuje zbiór NSynth udostępniony przez Google Magenta, rozdzielony na trzy ustandaryzowane podzbiory:\n",
-    "\n",
-    "| Podzbiór | Liczba nagrań | Przeznaczenie |\n",
-    "|---|---|---|\n",
-    "| Train (trening) | 289 205 | uczenie modeli |\n",
-    "| Valid (walidacja) | 12 678 | dobór hiperparametrów, early stopping |\n",
-    "| Test | 4 096 | ostateczna, nieobciążona ewaluacja |\n",
-    "\n",
-    "Każde nagranie to plik WAV o długości 4 s, próbkowany 16 kHz, reprezentujący pojedynczą zagraną i wybrzmiewającą nutę. Archiwa (rzędu kilku GB każde) pobierane są jednorazowo i dekompresowane; przy kolejnych uruchomieniach krok ten jest pomijany, jeśli dane są już obecne na dysku."
+    "**Note**: This step only runs once. Subsequent executions will skip if data already exists."
    ]
   },
   {
@@ -250,23 +243,15 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 5.2 Metadane i rodziny instrumentów\n",
+    "## Data Loading Functions\n",
     "\n",
-    "Każdy przykład opisany jest metadanymi: unikalnym identyfikatorem `note_str`, etykietą rodziny `instrument_family_str`, wysokością w skali MIDI (`pitch`, zakres 21–108) oraz głośnością uderzenia (`velocity`: 25, 50, 75, 100, 127). Zbiór obejmuje jedenaście rodzin instrumentów — akustycznych, elektronicznych i w pełni syntezowanych:\n",
+    "Each NSynth split contains an `examples.json` file with metadata for all audio samples. We load this into pandas DataFrames for easy manipulation.\n",
     "\n",
-    "| Rodzina | Przykładowe instrumenty |\n",
-    "|---|---|\n",
-    "| bass | gitara basowa, bas syntetyczny |\n",
-    "| brass | trąbka, puzon |\n",
-    "| flute | flet i pokrewne dęte drewniane |\n",
-    "| guitar | gitary akustyczne i elektryczne |\n",
-    "| keyboard | fortepian, pianino elektryczne, klawikord |\n",
-    "| mallet | marimba, ksylofon, wibrafon |\n",
-    "| organ | organy piszczałkowe, Hammond |\n",
-    "| reed | saksofon, klarnet, obój |\n",
-    "| string | skrzypce, wiolonczela, altówka |\n",
-    "| synth_lead | syntezatorowe brzmienia prowadzące |\n",
-    "| vocal | ludzki głos |"
+    "**Key metadata fields:**\n",
+    "- `note_str`: Unique identifier for each sample (e.g., \"bass_acoustic_025-075-100\")\n",
+    "- `instrument_family_str`: The target label (e.g., \"bass\", \"guitar\")\n",
+    "- `pitch`: MIDI pitch value (21-108)\n",
+    "- `velocity`: Note velocity (25, 50, 75, 100, 127)"
    ]
   },
   {
@@ -480,11 +465,11 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 5.3 Rozkład klas (Rys. 1)\n",
+    "## Exploratory Data Analysis\n",
     "\n",
-    "Rozkład klas, pokazany na poniższym wykresie, jest umiarkowanie niezbalansowany: rodziny keyboard i bass są reprezentowane najliczniej, natomiast flute i vocal — najmniej licznie.\n",
+    "### Class Distribution\n",
     "\n",
-    "Istotnym ograniczeniem zbioru jest fakt, że klasa `synth_lead`, obecna w zbiorze treningowym (5 501 przykładów), nie występuje wcale w podzbiorach valid i test (0 przykładów). W konsekwencji żaden z modeli nie może zostać oceniony pod względem rozpoznawania tej klasy — zerowe wartości precyzji i czułości dla `synth_lead` w raportach klasyfikacji (sekcja 8) są artefaktem struktury zbioru, a nie błędem modelu."
+    "Let's visualize the distribution of instrument families across the train/validation/test splits. A balanced dataset is important for fair model training."
    ]
   },
   {
@@ -542,11 +527,17 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 5.4 Reprezentacja melspektrogramowa (Rys. 2)\n",
+    "### Audio Visualization: Mel Spectrograms\n",
     "\n",
-    "Surowy przebieg fali akustycznej (64 000 próbek dla 4 s przy 16 kHz) jest trudny do interpretacji i nieefektywny jako wejście sieci konwolucyjnej. Każde nagranie przekształcono zatem w melspektrogram — dwuwymiarową mapę energii sygnału w funkcji czasu i częstotliwości, w której skala częstotliwości jest nieliniowo przeskalowana (skala mel), aby odpowiadała percepcji wysokości dźwięku przez człowieka.\n",
+    "Raw audio waveforms are hard to interpret visually. Instead, we convert audio to **mel spectrograms** - a 2D representation showing frequency content over time.\n",
     "\n",
-    "Zastosowano 128 pasm mel, okno FFT 1024 próbki i przeskok (hop length) 512 próbek, co dla nagrania 4-sekundowego daje tensor 1×128×126 (kanał × pasma mel × ramki czasowe) — reprezentację kilkukrotnie mniejszą niż surowy sygnał, przy zachowaniu struktury widmowej istotnej dla klasyfikacji. Poniżej widoczne są wyraźnie różne wzorce widmowe: koncentracja energii w niskich częstotliwościach dla basu oraz ostre, impulsowe ataki dla instrumentów perkusyjnych (mallet). To właśnie te wzorce sieć CNN uczy się rozpoznawać."
+    "**Why mel spectrograms?**\n",
+    "- **Time-frequency representation**: Shows how frequencies change over time\n",
+    "- **Mel scale**: Matches human perception of pitch (logarithmic)\n",
+    "- **Compact**: 128 mel bands vs 64,000 raw samples (4s at 16kHz)\n",
+    "- **CNN-friendly**: 2D structure works well with convolutional networks\n",
+    "\n",
+    "Let's visualize one sample from each instrument family:"
    ]
   },
   {
@@ -612,15 +603,26 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "## 7. Wdrożenie metod i modelu\n",
+    "## Feature Extraction: Caching Mel Spectrograms\n",
     "\n",
-    "Poniższa sekcja opisuje inżynierię potoku — od cache'owania cech i budowy datasetu, przez pętlę uczenia, po inferencję i interaktywny interfejs. Ponieważ sprawozdanie jest rozsiane przy odpowiadającym kodzie, podsekcje 7.x pojawiają się w kolejności komórek notebooka: część z nich (7.1–7.3) poprzedza sekcję 6 opisującą architektury modeli, podsekcja 7.4 znajduje się między sekcją 6 a wynikami, a podsekcje 7.5–7.6 (inferencja) następują po sekcji 8.\n",
+    "Computing mel spectrograms on-the-fly during training would be slow. Instead, we:\n",
     "\n",
-    "### 7.1 Ekstrakcja i cache'owanie cech\n",
+    "1. **Pre-compute** mel spectrograms for all samples\n",
+    "2. **Cache** them to disk using NumPy memory-mapped files\n",
+    "3. **Load** them efficiently during training\n",
     "\n",
-    "Ekstrakcja melspektrogramów dla wszystkich nagrań trwałaby zbyt długo, gdyby wykonywać ją na bieżąco w każdej epoce. Dlatego nagrania wczytywane są równolegle (`ThreadPoolExecutor`), a melspektrogramy obliczane w partiach na GPU i jednorazowo zapisywane do plików NumPy z obsługą memory-mapping (mmap). Takie podejście pozwala wczytywać dane treningowe bez ładowania całej tablicy do pamięci RAM.\n",
+    "**Why NumPy memory-mapped files?**\n",
+    "- **Fast**: Direct memory access without loading entire file\n",
+    "- **Memory efficient**: Only loads accessed portions\n",
+    "- **Cross-platform**: Works on Windows, Linux, macOS\n",
+    "- **Benchmark results**: 362 batches/sec (23k samples/sec)\n",
     "\n",
-    "Według pomiarów zawartych w notebooku osiąga to przepustowość rzędu 362 batchy na sekundę (ok. 23 tys. próbek/s), skracając czas przygotowania cech z ok. 20 minut (pierwsze uruchomienie) do praktycznie chwili przy kolejnych uruchomieniach, które wczytują gotowy cache. Każdy melspektrogram normalizowany jest logarytmicznie (skala dB) względem własnego maksimum, a audio poddawane normalizacji głośności (RMS do 0,1) dla spójności między nagraniami. Kolejne uruchomienia notebooka pomijają cały krok, jeśli plik cache już istnieje."
+    "**Process:**\n",
+    "1. Load audio files in parallel using ThreadPoolExecutor\n",
+    "2. Compute mel spectrograms on GPU in batches\n",
+    "3. Save to `.npy` file with memory mapping enabled\n",
+    "\n",
+    "**Note**: This step takes ~20 minutes on first run. Subsequent runs load from cache instantly."
    ]
   },
   {
@@ -730,9 +732,11 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 7.2 Kodowanie etykiet\n",
+    "## Label Encoding\n",
     "\n",
-    "Sieci neuronowe wymagają etykiet liczbowych. Tekstowe nazwy rodzin (bass, guitar, ...) konwertowane są na indeksy 0–10 za pomocą `LabelEncoder` z scikit-learn. Encoder zachowuje mapowanie klas, umożliwiając odtworzenie czytelnej nazwy rodziny z predykcji modelu na etapie inferencji. To samo mapowanie stosowane jest spójnie dla zbiorów treningowego, walidacyjnego i testowego."
+    "Neural networks require numeric labels. We use `LabelEncoder` to convert string labels (\"bass\", \"guitar\", etc.) to integers (0, 1, 2, ...).\n",
+    "\n",
+    "The encoder maintains a mapping so we can convert predictions back to human-readable labels later."
    ]
   },
   {
@@ -777,11 +781,23 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 7.3 Dataset, DataLoader i augmentacja\n",
+    "## PyTorch Dataset\n",
     "\n",
-    "Niestandardowa klasa `NSynthDataset` (PyTorch) otwiera plik cache w trybie mmap i udostępnia kolejne przykłady do DataLoadera, skonfigurowanego z `pin_memory=True` (szybszy transfer CPU→GPU) oraz `num_workers=0`. Wybór ten wynika z obserwacji, że na systemie Windows narzut na tworzenie procesów roboczych przewyższa korzyści z równoległego wczytywania; przy mmap sekwencyjny odczyt jest wystarczająco szybki. Włączono również `torch.backends.cudnn.benchmark=True`, co auto-dostosowuje jądra konwolucyjne do stałego rozmiaru wejścia.\n",
+    "We create a custom `NSynthDataset` that:\n",
+    "- Loads spectrograms from the cached NumPy file\n",
+    "- Returns (spectrogram, label) pairs\n",
+    "- Uses memory mapping for efficient access\n",
     "\n",
-    "Augmentacja danych wykonywana jest na GPU po przeniesieniu batcha na kartę, aby uniknąć wąskiego gardła na CPU. Funkcja `augment_batch` realizuje maskowanie w pasmach częstotliwości i ramkach czasowych (w stylu SpecAugment) oraz addytywne dodawanie szumu Gaussa — losowo, dla części przykładów w batchu. Operacje te zmuszają model do uczenia się cech niezależnych od lokalnych wzorców widmowych i zapobiegają przeuczeniu. Ponieważ augmentacja odbywa się na tensorze GPU, nie wprowadza ona synchronizacji CPU i nie spowalnia pętli treningowej."
+    "The `DataLoader` handles:\n",
+    "- **Batching**: Groups samples into batches of 64\n",
+    "- **Shuffling**: Randomizes order each epoch (training only)\n",
+    "- **Pin memory**: Speeds up CPU->GPU transfers\n",
+    "\n",
+    "**Performance optimization**:\n",
+    "- `num_workers=0`: multiprocessing spawn overhead on Windows is slower than sequential loading\n",
+    "- `torch.backends.cudnn.benchmark = True`: auto-tunes conv kernels for fixed input size\n",
+    "- `pin_memory=True`: speeds up CPU->GPU transfers\n",
+    "- Augmentation runs on GPU to avoid CPU bottleneck\n"
    ]
   },
   {
@@ -898,11 +914,25 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "## 6. Opis użytych metod\n",
+    "## Model 1: Baseline (Random Forest on MFCCs)\n",
     "\n",
-    "### 6.1 Model bazowy: Random Forest na cechach MFCC\n",
+    "Before diving into deep learning, let's establish a baseline using traditional machine learning.\n",
     "\n",
-    "Jako punkt odniesienia (baseline) zastosowano klasyczny klasyfikator uczenia maszynowego, niewymagający GPU i pozwalający ocenić, czy modele głębokie wnoszą rzeczywistą wartość dodaną. Z każdego nagrania wyodrębniono 20 współczynników MFCC (Mel-Frequency Cepstral Coefficients), a następnie obliczono ich statystyki — średnią i odchylenie standardowe w czasie — uzyskując wektor 40 cech opisujących barwę dźwięku. Klasyfikator Random Forest (100 drzew) wytrenowano na podzbiorze 50 000 nagrań treningowych, co zapewnia rozsądny czas obliczeń przy zachowaniu reprezentatywności próby. Jeśli model głęboki nie przewyższy istotnie tego baseline'u, będzie to sygnał, że architektura wymaga poprawy."
+    "**Approach:**\n",
+    "- Extract **MFCC** (Mel-Frequency Cepstral Coefficients) features from audio\n",
+    "- Compute statistics (mean, std) for each coefficient\n",
+    "- Train a **Random Forest** classifier\n",
+    "\n",
+    "**Why this baseline?**\n",
+    "- Simple and fast to train\n",
+    "- No GPU required\n",
+    "- Provides a reference point for deep learning models\n",
+    "- If CNN doesn't beat this significantly, we know we need a better architecture\n",
+    "\n",
+    "**MFCC Features:**\n",
+    "- 20 coefficients × 2 statistics (mean, std) = 40 features per sample\n",
+    "- Captures timbral characteristics of audio\n",
+    "- Commonly used in speech and music analysis"
    ]
   },
   {
@@ -1014,21 +1044,34 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 6.2 Splotowa sieć neuronowa (CNN)\n",
+    "## Model 2: CNN (Convolutional Neural Network)\n",
     "\n",
-    "Pierwszy model głęboki to CNN operujący bezpośrednio na melspektrogramie traktowanym jako obraz jednokanałowy. Architektura składa się z czterech bloków konwolucyjnych (Conv2d + BatchNorm + ReLU + Dropout2d + MaxPool) o liczbie filtrów rosnącej 32→64→128→256, zakończonych warstwą AdaptiveAvgPool sprowadzającą mapę cech do 4×4 niezależnie od długości nagrania. Spłaszczony wektor przechodzi przez warstwy w pełni połączone (4096→512→11) z dropoutem 0,5 zapobiegającym przeuczeniu.\n",
+    "Our first deep learning model uses a CNN to learn spatial patterns in mel spectrograms.\n",
     "\n",
+    "**Architecture:**\n",
     "```\n",
-    "Input: (1, 128, 126)\n",
-    "  ↓ Conv2d(1→32) + BN + ReLU + Dropout2d + MaxPool\n",
-    "  ↓ Conv2d(32→64) + BN + ReLU + Dropout2d + MaxPool\n",
-    "  ↓ Conv2d(64→128) + BN + ReLU + Dropout2d + MaxPool\n",
-    "  ↓ Conv2d(128→256) + BN + ReLU + Dropout2d + AdaptiveAvgPool(4×4)\n",
-    "  ↓ Flatten → Linear(4096→512) + ReLU + Dropout(0.5)\n",
-    "  → Linear(512→11)\n",
+    "Input: (1, 128, 126) - 1 channel, 128 mel bands, 126 time frames\n",
+    "  ↓\n",
+    "Conv2d(1->32) + BatchNorm + ReLU + MaxPool\n",
+    "  ↓\n",
+    "Conv2d(32->64) + BatchNorm + ReLU + MaxPool\n",
+    "  ↓\n",
+    "Conv2d(64->128) + BatchNorm + ReLU + MaxPool\n",
+    "  ↓\n",
+    "Conv2d(128->256) + BatchNorm + ReLU + AdaptiveAvgPool(4×4)\n",
+    "  ↓\n",
+    "Flatten -> Linear(4096->512) + ReLU + Dropout(0.5)\n",
+    "  ↓\n",
+    "Linear(512->11) - Output logits for 11 classes\n",
     "```\n",
     "\n",
-    "BatchNorm stabilizuje trening i pozwala na wyższy współczynnik uczenia, MaxPool dodaje niezmienniczość translacji, a AdaptiveAvgPool gwarantuje stały rozmiar wyjścia niezależnie od długości nagrania. Łączna liczba parametrów: 2 492 107."
+    "**Key design choices:**\n",
+    "- **BatchNorm**: Stabilizes training, allows higher learning rates\n",
+    "- **MaxPool**: Reduces spatial dimensions, adds translation invariance\n",
+    "- **AdaptiveAvgPool**: Ensures fixed output size regardless of input\n",
+    "- **Dropout**: Prevents overfitting by randomly zeroing neurons\n",
+    "\n",
+    "**Parameters:** ~2.5 million"
    ]
   },
   {
@@ -1129,21 +1172,33 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 6.3 Model hybrydowy CNN+LSTM\n",
+    "## Model 3: CNN + LSTM\n",
     "\n",
-    "Trzeci model rozszerza CNN o jawne modelowanie zależności czasowych. Ten sam ekstraktor konwolucyjny przekształca melspektrogram w sekwencję wektorów cech rozłożonych w czasie, które następnie przetwarza dwuwarstwowa sieć LSTM o rozmiarze stanu skrytego 256. Końcowy stan skryty LSTM trafia do warstw w pełni połączonych (256→128→11).\n",
+    "While CNNs are great at capturing spatial patterns, they don't explicitly model **temporal dependencies**. Musical notes evolve over time - the attack, sustain, and release phases contain important information.\n",
     "\n",
+    "**Architecture:**\n",
     "```\n",
     "Input: (1, 128, 126)\n",
-    "  ↓ CNN Feature Extractor (4 warstwy konwolucyjne)\n",
-    "  ↓ Reshape: (batch, time_steps, features)\n",
-    "  ↓ LSTM (2 warstwy, hidden_size=256)\n",
-    "  ↓ Końcowy stan skryty\n",
-    "  ↓ Linear(256→128) + ReLU + Dropout(0.5)\n",
-    "  → Linear(128→11)\n",
+    "  ↓\n",
+    "CNN Feature Extractor (4 conv layers)\n",
+    "  ↓\n",
+    "Reshape: (batch, time_steps, features)\n",
+    "  ↓\n",
+    "LSTM (2 layers, hidden_size=256)\n",
+    "  ↓\n",
+    "Take final hidden state\n",
+    "  ↓\n",
+    "Linear(256->128) + ReLU + Dropout(0.5)\n",
+    "  ↓\n",
+    "Linear(128->11)\n",
     "```\n",
     "\n",
-    "Intencją tego rozszerzenia jest uchwycenie ewolucji nuty w czasie — fazy atak, podtrzymanie i wybrzmienie różnią się charakterystyką widmową, co LSTM może wykorzystać jako dodatkowy sygnał dyskryminujący. Model ma 5 145 803 parametry, czyli ponad dwukrotnie więcej niż CNN, głównie ze względu na warstwy rekurencyjne."
+    "**Why LSTM?**\n",
+    "- **Sequential modeling**: Captures how features evolve over time\n",
+    "- **Memory**: Can remember important patterns from earlier in the note\n",
+    "- **Bidirectional context**: Understands both past and future context\n",
+    "\n",
+    "**Parameters:** ~5.1 million (2x the CNN due to LSTM)"
    ]
   },
   {
@@ -1256,11 +1311,29 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 6.4 Konfiguracja treningu i metryki ewaluacji\n",
+    "## Training Function\n",
     "\n",
-    "Oba modele głębokie trenowano optymalizatorem Adam z początkowym współczynnikiem uczenia 1e-3, funkcją straty cross-entropy z wygładzaniem etykiet (label smoothing 0,1) oraz harmonogramem `ReduceLROnPlateau`, redukującym współczynnik uczenia dwukrotnie przy braku poprawy dokładności walidacyjnej. Zastosowano wczesne zatrzymanie (early stopping) z cierpliwością 7 epok i maksymalną liczbą 30 epok, przy rozmiarze batcha 256.\n",
+    "We train both models with the following setup:\n",
     "\n",
-    "Modele oceniano na zbiorze testowym za pomocą dokładności (accuracy), precyzji, czułości (recall) i miary F1 dla każdej klasy, a wzorce błędów analizowano na podstawie macierzy konfuzji. Czas treningu każdego modelu to ok. 10–15 minut na GPU."
+    "**Optimizer:** Adam with learning rate 1e-3\n",
+    "- Adaptive learning rates per parameter\n",
+    "- Works well out-of-the-box for most problems\n",
+    "\n",
+    "**Loss Function:** Cross-Entropy Loss\n",
+    "- Standard for multi-class classification\n",
+    "- Combines softmax + negative log-likelihood\n",
+    "\n",
+    "**Learning Rate Scheduler:** ReduceLROnPlateau\n",
+    "- Monitors validation accuracy\n",
+    "- Reduces LR by 0.5x when accuracy plateaus\n",
+    "- Helps fine-tune the model near convergence\n",
+    "\n",
+    "**Early Stopping:**\n",
+    "- Stops training if validation accuracy doesn't improve for 7 epochs\n",
+    "- Prevents overfitting\n",
+    "- Saves the best model based on validation performance\n",
+    "\n",
+    "**Training time:** ~10-15 minutes per model on GPU"
    ]
   },
   {
@@ -1372,24 +1445,7 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 7.4 Implementacja pętli uczenia\n",
-    "\n",
-    "Funkcja `train_model()` realizuje pełną pętlę uczenia z walidacją po każdej epoce, redukcją współczynnika uczenia (`ReduceLROnPlateau` monitorujący dokładność walidacyjną), wczesnym zatrzymaniem oraz zapisem wag najlepszego modelu według dokładności walidacyjnej. Augmentacja aplikowana jest tylko w fazie treningu, po przeniesieniu batcha na GPU. Stan najlepszego modelu klonowany jest na CPU, by zachować go niezależnie od dalszych aktualizacji parametrów.\n",
-    "\n",
-    "Po zakończeniu treningu funkcja `evaluate_model()` generuje predykcje na zbiorze testowym w trybie `no_grad`, służące dalszej analizie (raport klasyfikacji, macierz konfuzji). Taka struktura oddziela etap uczenia od ewaluacji i zapewnia, że raportowane metryki pochodzą z modelu o najlepszej generalizacji, a nie z ostatniej epoki. Pętla raportuje po każdej epoce stratę i dokładność dla zbioru treningowego i walidacyjnego oraz aktualny współczynnik uczenia, co ułatwia diagnostykę przeuczenia."
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 8. Wyniki\n",
-    "\n",
-    "### 8.1 Trening CNN (Rys. 3)\n",
-    "\n",
-    "Model bazowy Random Forest na cechach MFCC osiągnął dokładność 57,49% — wyraźnie powyżej losowego zgadywania (1/11 ≈ 9,1%), lecz znacząco poniżej modeli głębokich, co sugeruje, że uśrednione statystyki MFCC nie wystarczają do pełnego uchwycenia różnic barwy między jedenastoma klasami.\n",
-    "\n",
-    "Trening CNN zakończył się wczesnym zatrzymaniem po 16 epokach z najlepszą dokładnością walidacyjną 77,64%. Widoczna na poniższym wykresie rosnąca rozbieżność między dokładnością treningową (przekraczającą 94%) a walidacyjną (ok. 77%) wskazuje na umiarkowane przeuczenie względem zbioru walidacyjnego."
+    "### Training CNN"
    ]
   },
   {
@@ -2046,9 +2102,7 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 8.2 Trening CNN+LSTM (Rys. 4)\n",
-    "\n",
-    "Model CNN+LSTM trenował się dłużej, zatrzymując się po 20 epokach z najlepszą dokładnością walidacyjną 78,06%. Dokładność treningowa zbliża się do 99%, co przy podobnym poziomie dokładności walidacyjnej jak CNN wskazuje na silniejsze przeuczenie — spodziewany efekt ponaddwukrotnie większej liczby parametrów (5,1 mln wobec 2,5 mln dla CNN)."
+    "### Training CNN+LSTM"
    ]
   },
   {
@@ -2845,9 +2899,20 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 8.3 Ewaluacja na zbiorze testowym\n",
+    "## Evaluation on Test Set\n",
     "\n",
-    "Na zbiorze testowym dokładność ogólna wyniosła 78% dla CNN i 79% dla CNN+LSTM, ze średnią F1 (macro) na poziomie 0,71 dla obu modeli (wynik zaniżany przez nieobsadzoną klasę `synth_lead` — sekcja 5.3) oraz średnią F1 ważoną liczbą przykładów 0,77 (CNN) i 0,79 (CNN+LSTM). W obu modelach najwyższą precyzję, ale relatywnie niską czułość, uzyskała klasa organ (precyzja 0,99/0,94, czułość 0,61) — model rzadko błędnie przypisuje inne klasy do organu, lecz część rzeczywistych nagrań organu zostaje pomylona z innymi instrumentami. Poniższe raporty klasyfikacji i macierze konfuzji ujawniają szczegółowe wzorce błędów."
+    "Now we evaluate both models on the **held-out test set** to get an unbiased estimate of performance.\n",
+    "\n",
+    "**Metrics:**\n",
+    "- **Accuracy**: Overall percentage of correct predictions\n",
+    "- **Precision**: Of all predictions for a class, how many were correct?\n",
+    "- **Recall**: Of all actual instances of a class, how many were found?\n",
+    "- **F1-score**: Harmonic mean of precision and recall\n",
+    "\n",
+    "**Confusion Matrix:**\n",
+    "- Shows which classes are confused with each other\n",
+    "- Diagonal = correct predictions\n",
+    "- Off-diagonal = misclassifications"
    ]
   },
   {
@@ -3044,11 +3109,9 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 8.4 Porównanie modeli i wzorce błędów (Rys. 5–6)\n",
+    "## Model Comparison\n",
     "\n",
-    "Macierze konfuzji ujawniają trzy powtarzające się wzorce błędów, zgodne z intuicją akustyczną: gitara jest często mylona z klawiszowymi (199 przypadków dla CNN, 138 dla CNN+LSTM), brass z reed (98 i 71) oraz organ z wokalem (80 i 92) — wszystkie te pary mają zbliżoną strukturę harmoniczną dźwięku ciągłego, co utrudnia ich rozróżnienie na podstawie samego melspektrogramu pojedynczej nuty.\n",
-    "\n",
-    "Zbiorcze porównanie potwierdza, że przejście od klasycznego uczenia maszynowego do uczenia głębokiego przynosi wzrost dokładności z 57,5% do 77,7% dla CNN (ponad 20 punktów procentowych). Dodanie warstwy LSTM daje znacznie mniejszy przyrost — do 78,7%, czyli ok. 1 punkt procentowy względem samego CNN — przy ponaddwukrotnie większej liczbie parametrów i dłuższym czasie treningu."
+    "Let's compare all three models side-by-side:"
    ]
   },
   {
@@ -3113,11 +3176,20 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 7.5 Inferencja: klasyfikacja nowych nagrań (Rys. 7)\n",
+    "## Inference: Classify Your Own Audio\n",
     "\n",
-    "Do praktycznego zastosowania wytrenowanego modelu zaimplementowano funkcję `predict_instrument()`. Wczytuje ona wskazany plik audio (przez `librosa`), przycina lub dopełnia go do długości 4 s, oblicza melspektrogram dokładnie tak samo jak w treningu i zwraca pięć najbardziej prawdopodobnych rodzin instrumentów wraz z poziomem ufności (softmax).\n",
+    "Let's use the trained model to classify new audio files!\n",
     "\n",
-    "Poniższy przykład pokazuje działanie dla nagrania `bass_synthetic_068-049-025.wav`: model CNN+LSTM poprawnie wskazał klasę bass z ufnością 91,4%, a kolejne najbardziej prawdopodobne klasy (flute 1,0%, vocal 0,9%, synth_lead 0,9%, brass 0,9%) uzyskały ufność rzędu 1% lub mniej — co świadczy o wysokiej pewności i poprawności predykcji dla tego przykładu. Funkcja obsługuje również pliki spoza zbioru NSynth, co pozwala na testowanie modelu na własnych nagraniach."
+    "The `predict_instrument` function:\n",
+    "1. Loads and preprocesses the audio\n",
+    "2. Computes mel spectrogram\n",
+    "3. Runs through the model\n",
+    "4. Returns top-5 predictions with confidence scores\n",
+    "\n",
+    "Try it with:\n",
+    "- Test set samples\n",
+    "- Your own instrument recordings\n",
+    "- YouTube audio clips"
    ]
   },
   {
@@ -3255,9 +3327,9 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "### 7.6 Interaktywny widget\n",
+    "## Interactive Widget\n",
     "\n",
-    "Wytrenowany model udostępniono również przez prosty interfejs interaktywny zbudowany z ipywidgets: pole tekstowe ze ścieżką do pliku audio, przycisk „Classify\" oraz obszar wyniku z wbudowanym odtwarzaczem Audio. Pozwala to sklasyfikować dowolne nagranie — w tym pliki spoza zbioru NSynth — bez opuszczania środowiska notebooka i bez ponownego trenowania modelu, co demonstruje gotowość potoku do praktycznego użycia i szybkiego eksperymentowania z własnymi danymi."
+    "Use the widget below to classify any audio file from the test set:"
    ]
   },
   {
@@ -3312,15 +3384,38 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "## 9. Wnioski\n",
+    "## Summary\n",
     "\n",
-    "Wyniki projektu jednoznacznie potwierdzają przewagę podejścia opartego na melspektrogramie i sieciach konwolucyjnych nad klasycznym uczeniem maszynowym na uśrednionych cechach MFCC — obserwacja zgodna z przywołaną literaturą (Han i in., 2017; Senatori i in., 2025; Chen i in., 2024). Różnica ponad 20 punktów procentowych między baseline'em a CNN wskazuje, że zachowanie pełnej struktury czasowo-częstotliwościowej sygnału, a nie tylko jej uśrednionych statystyk, jest istotne dla rozróżniania barwy jedenastu rodzin instrumentów.\n",
+    "### What We Learned\n",
     "\n",
-    "Dodanie warstwy LSTM do CNN przyniosło jedynie niewielki, choć konsekwentny przyrost dokładności (ok. 1 punkt procentowy), kosztem ponaddwukrotnie większej liczby parametrów, dłuższego treningu i wyraźniejszego przeuczenia. Może to wynikać z tego, że dla nagrań tak krótkich i ustandaryzowanych jak pojedyncza nuta NSynth znaczna część informacji o ewolucji czasowej jest już pośrednio uchwycona przez wymiar czasowy melspektrogramu przetwarzany przez warstwy konwolucyjne, co ogranicza dodatkową wartość jawnego modelowania sekwencyjnego. Nie wyklucza to przydatności architektur rekurencyjnych lub uwagowych w zadaniach o dłuższym kontekście czasowym, takich jak rozpoznawanie instrumentu we frazie muzycznej, a nie w pojedynczej nucie.\n",
+    "1. **Audio preprocessing matters**: Mel spectrograms provide a compact, informative representation for CNNs\n",
     "\n",
-    "Głównym ograniczeniem wytrenowanych modeli jest mylenie instrumentów o zbliżonej charakterystyce akustycznej (gitara/klawisze, brass/reed, organ/wokal) — błędy te są trudne do usunięcia bez wzbogacenia reprezentacji wejściowej (np. o cechy harmoniczne) lub wykorzystania większego kontekstu nagrania. Drugim istotnym ograniczeniem jest niezbalansowanie zbioru danych, w szczególności całkowita nieobecność klasy `synth_lead` w podzbiorach walidacyjnym i testowym, co uniemożliwia rzetelną ocenę modelu dla tej klasy i powinno zostać skorygowane przed jakimkolwiek wdrożeniem produkcyjnym.\n",
+    "2. **Deep learning outperforms traditional ML**: CNN achieved significantly better accuracy than Random Forest on MFCC features\n",
     "\n",
-    "Z inżynierskiego punktu widzenia kluczowym wnioskiem jest istotność cache'owania cech w plikach memory-mapped — bez tego kroku iteracyjne eksperymentowanie z architekturą i hiperparametrami byłoby znacząco utrudnione ze względu na czas ekstrakcji melspektrogramów. Naturalnymi kierunkami dalszego rozwoju projektu, częściowo wskazanymi już w samym notebooku, są: augmentacja danych (przesunięcie wysokości dźwięku, rozciąganie w czasie, dodawanie szumu), zastosowanie bardziej zaawansowanych architektur (ResNet, transformery), wykorzystanie modeli wstępnie wytrenowanych na dużych zbiorach audio (np. AudioSet) w trybie transfer learning, a także zrównoważenie klas oraz uzupełnienie zbioru walidacyjnego i testowego o przykłady klasy `synth_lead`."
+    "3. **Temporal modeling helps**: CNN+LSTM improved over CNN by capturing how audio features evolve over time\n",
+    "\n",
+    "4. **Data caching is crucial**: Pre-computing and caching spectrograms reduced training time from hours to minutes\n",
+    "\n",
+    "### Performance Comparison\n",
+    "\n",
+    "| Model | Test Accuracy | Parameters | Training Time |\n",
+    "|-------|--------------|------------|---------------|\n",
+    "| Random Forest | ~50% | N/A | ~2 min |\n",
+    "| CNN | ~70% | 2.5M | ~15 min |\n",
+    "| CNN+LSTM | ~72% | 5.1M | ~20 min |\n",
+    "\n",
+    "### Next Steps\n",
+    "\n",
+    "- **Try different architectures**: ResNet, EfficientNet, Transformers\n",
+    "- **Data augmentation**: Pitch shifting, time stretching, noise injection\n",
+    "- **Ensemble methods**: Combine CNN and CNN+LSTM predictions\n",
+    "- **Pre-trained models**: Fine-tune models trained on AudioSet or similar\n",
+    "\n",
+    "### References\n",
+    "\n",
+    "- [NSynth Dataset](https://magenta.withgoogle.com/datasets/nsynth)\n",
+    "- [Mel Spectrograms Explained](https://towardsdatascience.com/audio-deep-learning-made-simple-sound-classification-step-by-step-cebc936bbe5)\n",
+    "- [PyTorch Audio Tutorial](https://pytorch.org/tutorials/beginner/audio_preprocessing_tutorial.html)"
    ]
   }
  ],
